@@ -241,11 +241,28 @@ def view_translation_results_as_dict(
     )
     return translation_results
 
-def translate_queries_and_render_results(queries: List[str],
+def translate_queries_and_render_results(
+    queries: List[str],
+    source_type: str | None = None,
+    target_type: str | None = None,
     org_token: str | None = None,
     include_identity: bool = True,
-    host: str | None = None) -> None:
-        # Use default org token if not provided
+    host: str | None = None
+) -> None:
+    """
+    Translate SQL queries and render results.
+
+    Args:
+        queries: List of SQL queries to translate
+        source_type: Source database type (e.g., 'snowflake', 'redshift').
+                     If None, uses first non-target data source
+        target_type: Target database type (e.g., 'bigquery', 'databricks').
+                     If None, uses 'databricks' for backward compatibility
+        org_token: Organization token for authentication (defaults to DEFAULT_ORG_TOKEN)
+        include_identity: Whether to collect and send identity info (default: True)
+        host: Host URL for Datafold instance (defaults to DEFAULT_HOST)
+    """
+    # Use default org token if not provided
     if org_token is None:
         org_token = DEFAULT_ORG_TOKEN
 
@@ -260,11 +277,62 @@ def translate_queries_and_render_results(queries: List[str],
         raise ValueError(
             "API key is not set. Please call create_organization or set the API key manually."
         )
-    project_id, translation_id = translate_queries(api_key, queries, host)
-    html = view_translation_results_as_html(api_key, project_id, translation_id)
+
+    # Get host
+    host = _get_host(host)
+
+    # Create DMA project with specified source and target types
+    data_sources = _get_data_sources(api_key, host)
+
+    # Determine target type (default to databricks for backward compatibility)
+    if target_type is None:
+        target_type = 'databricks'
+
+    # Find source and target data sources
+    if source_type:
+        source_ds = next((d for d in data_sources if d['type'] == source_type), None)
+        if source_ds is None:
+            raise ValueError(f"No {source_type} data source found. Please configure a {source_type} data source.")
+    else:
+        # Use first non-target data source
+        source_ds = next((d for d in data_sources if d['type'] != target_type), None)
+        if source_ds is None:
+            raise ValueError(f"No source data source found (looking for non-{target_type}).")
+
+    target_ds = next((d for d in data_sources if d['type'] == target_type), None)
+    if target_ds is None:
+        raise ValueError(f"No {target_type} data source found. Please configure a {target_type} data source.")
+
+    source_data_source_id = source_ds['id']
+    target_data_source_id = target_ds['id']
+
+    project_name = f"{source_ds['type'].title()} to {target_ds['type'].title()} Translation"
+    project = _create_dma_project(
+        api_key, source_data_source_id, target_data_source_id, project_name, host
+    )
+    project_id = project['id']
+    print(f"✓ Project created with id {project_id}")
+
+    # Upload queries to translate
+    _upload_queries(host=host, api_key=api_key, project_id=project_id, queries=queries)
+    print(f"✓ Queries uploaded")
+
+    # Start translating queries
+    translation_id = _start_translation(api_key, project_id, host)
+    print(f"✓ Started translation with id {translation_id}")
+
+    # Store for later retrieval
+    global _last_project_id, _last_translation_id
+    _last_project_id = project_id
+    _last_translation_id = translation_id
+
+    # Wait for and display results
+    translation_results = _wait_for_translation_results(
+        api_key, project_id, translation_id, 5, host
+    )
+    html = _translation_results_html(translation_results)
 
     from IPython.display import HTML, display
-
     display(HTML(html))
 
 def translate_queries_and_get_results(queries: List[str],
