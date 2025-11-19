@@ -1,6 +1,7 @@
 import time
 import difflib
 import re
+import html
 from enum import Enum
 from typing import List, Dict, Tuple
 from dma_sdk.utils import prepare_api_url, prepare_headers, post_data, get_data
@@ -48,6 +49,8 @@ _current_api_key = None
 _identity = None
 _last_project_id = None
 _last_translation_id = None
+_last_source_type = None
+_last_target_type = None
 
 
 def get_context_info() -> dict[str, str]:
@@ -200,7 +203,12 @@ def translate_queries(api_key: str, queries: List[str], host: str | None = None)
 
 
 def view_translation_results_as_html(
-    api_key: str, project_id: int, translation_id: int, host: str | None = None
+    api_key: str,
+    project_id: int,
+    translation_id: int,
+    host: str | None = None,
+    source_type: str = "snowflake",
+    target_type: str = "databricks",
 ) -> str:
     """
     View translation results
@@ -210,6 +218,8 @@ def view_translation_results_as_html(
         api_key: Authentication token
         project_id: Project ID to translate
         translation_id: Translation ID used to translate
+        source_type: Source database type (e.g., 'snowflake', 'redshift')
+        target_type: Target database type (e.g., 'databricks', 'bigquery')
     Returns:
         str: html string to be displayed in Jupyter Notebook
     """
@@ -218,7 +228,7 @@ def view_translation_results_as_html(
     translation_results = _wait_for_translation_results(
         api_key, project_id, translation_id, 5, host
     )
-    return _translation_results_html(translation_results)
+    return _translation_results_html(translation_results, source_type, target_type)
 
 
 def view_translation_results_as_dict(
@@ -317,15 +327,17 @@ def translate_queries_and_render_results(
     print(f"✓ Started translation with id {translation_id}")
 
     # Store for later retrieval
-    global _last_project_id, _last_translation_id
+    global _last_project_id, _last_translation_id, _last_source_type, _last_target_type
     _last_project_id = project_id
     _last_translation_id = translation_id
+    _last_source_type = source_type
+    _last_target_type = target_type
 
     # Wait for and display results
     translation_results = _wait_for_translation_results(
         api_key, project_id, translation_id, 5, host
     )
-    html = _translation_results_html(translation_results)
+    html = _translation_results_html(translation_results, source_type, target_type)
 
     from IPython.display import HTML, display
 
@@ -373,7 +385,7 @@ def view_last_translation(
     Example:
         view_last_translation()
     """
-    global _last_project_id, _last_translation_id
+    global _last_project_id, _last_translation_id, _last_source_type, _last_target_type
 
     if _last_project_id is None or _last_translation_id is None:
         print("No previous translation found. Run translate_queries_and_render_results() first.")
@@ -403,7 +415,10 @@ def view_last_translation(
     response = get_data(url, headers=headers)
     result = response.json()
 
-    html = _translation_results_html(result)
+    # Use stored types or fall back to defaults
+    source_type = _last_source_type or "snowflake"
+    target_type = _last_target_type or "databricks"
+    html = _translation_results_html(result, source_type, target_type)
 
     from IPython.display import HTML, display
 
@@ -590,12 +605,16 @@ def _wait_for_translation_results(
         time.sleep(spinner_speed)
 
 
-def _translation_results_html(translation_results: Dict) -> str:
+def _translation_results_html(
+    translation_results: Dict, source_type: str = "snowflake", target_type: str = "databricks"
+) -> str:
     """
     Generate HTML representation of translation results.
 
     Args:
         translation_results: Translation results dictionary
+        source_type: Source database type (e.g., 'snowflake', 'redshift')
+        target_type: Target database type (e.g., 'databricks', 'bigquery')
 
     Returns:
         str: HTML string for display
@@ -627,7 +646,7 @@ def _translation_results_html(translation_results: Dict) -> str:
             {button_text}
         </button>
         <div class="content">
-            {_render_translated_model_as_html(model)}
+            {_render_translated_model_as_html(model, source_type, target_type)}
         </div>
         """
         )
@@ -693,12 +712,16 @@ def _translation_results_html(translation_results: Dict) -> str:
     return ''.join(html)
 
 
-def _render_translated_model_as_html(model: Dict) -> str:
+def _render_translated_model_as_html(
+    model: Dict, source_type: str = "snowflake", target_type: str = "databricks"
+) -> str:
     """
     Render a single translated model as HTML with diff highlighting.
 
     Args:
         model: Model dictionary containing source and target SQL
+        source_type: Source database type (e.g., 'snowflake', 'redshift')
+        target_type: Target database type (e.g., 'databricks', 'bigquery')
 
     Returns:
         str: HTML string with diff visualization
@@ -718,11 +741,11 @@ def _render_translated_model_as_html(model: Dict) -> str:
         failure_summary = model.get('failure_summary')
 
         if failure_summary:
-            problem = failure_summary.get('problem', '')
-            error_message = failure_summary.get('error_message', '')
-            solution = failure_summary.get('solution', '')
-            location = failure_summary.get('location')
-            reason = failure_summary.get('reason', '')
+            problem = html.escape(failure_summary.get('problem', ''))
+            error_message = html.escape(failure_summary.get('error_message', ''))
+            solution = html.escape(failure_summary.get('solution', ''))
+            location = html.escape(failure_summary.get('location', '')) if failure_summary.get('location') else None
+            reason = html.escape(failure_summary.get('reason', ''))
 
             failure_content = f"""
                 <div class="failure-section">
@@ -744,7 +767,7 @@ def _render_translated_model_as_html(model: Dict) -> str:
                 </div>
             """
         else:
-            failure_content = f'<div class="warning-message">The translation for "{asset_name}" could not be completed. Status: {status}</div>'
+            failure_content = f'<div class="warning-message">The translation for "{html.escape(asset_name)}" could not be completed. Status: {html.escape(status)}</div>'
 
         warning_html = f"""
         <div class="warning-box">
@@ -770,16 +793,16 @@ def _render_translated_model_as_html(model: Dict) -> str:
             line = diff[i]
 
             if line.startswith('  '):  # Unchanged line
-                content = line[2:]
+                content = html.escape(line[2:])
                 source_html.append(f'<div class="line unchanged">{content}</div>')
                 target_html.append(f'<div class="line unchanged">{content}</div>')
                 i += 1
             elif line.startswith('- '):  # Line only in source
-                content = line[2:]
+                content = html.escape(line[2:])
                 source_html.append(f'<div class="line removed">{content}</div>')
                 i += 1
             elif line.startswith('+ '):  # Line only in target
-                content = line[2:]
+                content = html.escape(line[2:])
                 target_html.append(f'<div class="line added">{content}</div>')
                 i += 1
             elif line.startswith('? '):  # Hint line (skip)
@@ -790,12 +813,12 @@ def _render_translated_model_as_html(model: Dict) -> str:
         diff_html = f"""
         <div class="sql-container">
             <div class="sql-column">
-                <h3>Snowflake SQL</h3>
-                {''.join(source_html)}
+                <h3>{source_type.title()} SQL</h3>
+                <pre><code class="language-sql">{''.join(source_html)}</code></pre>
             </div>
             <div class="sql-column">
-                <h3>Databricks SQL</h3>
-                {''.join(target_html)}
+                <h3>{target_type.title()} SQL</h3>
+                <pre><code class="language-sql">{''.join(target_html)}</code></pre>
             </div>
         </div>
         """
@@ -842,36 +865,55 @@ def _render_translated_model_as_html(model: Dict) -> str:
         .sql-container {{
             display: flex;
             gap: 20px;
-            font-family: monospace;
         }}
         .sql-column {{
             flex: 1;
             border: 1px solid #ddd;
-            padding: 15px;
             background-color: #f5f5f5;
             overflow-x: auto;
         }}
         .sql-column h3 {{
-            margin-top: 0;
+            margin: 0;
+            padding: 15px 15px 10px 15px;
             color: #333;
             font-family: sans-serif;
+            font-size: 16px;
+            background-color: #e8e8e8;
+            border-bottom: 2px solid #ccc;
+        }}
+        .sql-column pre {{
+            margin: 0;
+            padding: 15px;
+            overflow-x: auto;
+            background-color: #f8f8f8;
+        }}
+        .sql-column code {{
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+            font-size: 13px;
+            line-height: 1.6;
         }}
         .line {{
-            font-size: 12px;
-            line-height: 1.6;
+            display: block;
             padding: 2px 4px;
-            white-space: pre-wrap;
+            margin: 1px 0;
+            white-space: pre;
+            border-radius: 2px;
         }}
         .unchanged {{
             background-color: transparent;
+            color: #24292e;
         }}
         .removed {{
-            background-color: #ffecec;
+            background-color: #ffeef0;
             color: #d73a49;
+            border-left: 3px solid #d73a49;
+            padding-left: 8px;
         }}
         .added {{
-            background-color: #e6ffec;
+            background-color: #e6ffed;
             color: #22863a;
+            border-left: 3px solid #22863a;
+            padding-left: 8px;
         }}
     </style>
 
