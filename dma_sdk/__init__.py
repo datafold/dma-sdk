@@ -557,6 +557,7 @@ def _wait_for_translation_results(
     """
     from IPython.display import clear_output
     import sys
+    import requests
 
     host = _get_host(host)
     url = prepare_api_url(
@@ -570,31 +571,46 @@ def _wait_for_translation_results(
 
     last_check_time = 0
     i = 0
+    connection_error_count = 0
+    max_connection_errors = 5
 
     while True:
         current_time = time.time()
 
         # Check API status at poll_interval
         if current_time - last_check_time >= poll_interval:
-            response = get_data(url, headers=headers)
-            result = response.json()
-            status = result["status"]
+            try:
+                response = get_data(url, headers=headers)
+                result = response.json()
+                status = result["status"]
 
-            if status in [TranslationJobStatus.DONE, TranslationJobStatus.FAILED]:
-                # Count translations
-                translated_models = result.get("translated_models", [])
-                total_translations = len(translated_models)
-                validated_count = sum(
-                    1
-                    for model in translated_models
-                    if model.get("translation_status") == TranslationStatus.VALID_TRANSLATION
-                )
+                # Reset error count on successful request
+                connection_error_count = 0
 
-                print(f"\r✓ Translation completed with status: {status}")
-                if total_translations > 0:
-                    print(f"✓ Validated {validated_count} out of {total_translations} translations")
+                if status in [TranslationJobStatus.DONE, TranslationJobStatus.FAILED]:
+                    # Count translations
+                    translated_models = result.get("translated_models", [])
+                    total_translations = len(translated_models)
+                    validated_count = sum(
+                        1
+                        for model in translated_models
+                        if model.get("translation_status") == TranslationStatus.VALID_TRANSLATION
+                    )
+
+                    print(f"\r✓ Translation completed with status: {status}")
+                    if total_translations > 0:
+                        print(f"✓ Validated {validated_count} out of {total_translations} translations")
+                    sys.stdout.flush()
+                    return result
+            except (requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
+                connection_error_count += 1
+                if connection_error_count >= max_connection_errors:
+                    print(f"\r✗ Failed to connect after {max_connection_errors} attempts")
+                    sys.stdout.flush()
+                    raise
+                # Continue polling after connection error
+                print(f"\r⚠ Connection error {connection_error_count}/{max_connection_errors}, retrying...", end='')
                 sys.stdout.flush()
-                return result
 
             last_check_time = current_time
 
