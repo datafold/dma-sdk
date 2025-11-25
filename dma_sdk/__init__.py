@@ -162,7 +162,9 @@ def create_organization(org_token: str, host: str | None = None) -> Tuple[str, i
     return api_key, org_id
 
 
-def translate_queries(api_key: str, queries: List[str], host: str | None = None, concurrency: int | None = None) -> Tuple[int, int]:
+def translate_queries(
+    api_key: str, queries: List[str], host: str | None = None, concurrency: int | None = None
+) -> Tuple[int, int]:
     """
     Main entry point to translate a query end to end.
 
@@ -515,7 +517,9 @@ def _upload_queries(
     return response.json()
 
 
-def _start_translation(api_key: str, project_id: int, host: str = DEFAULT_HOST, concurrency: int | None = None) -> int:
+def _start_translation(
+    api_key: str, project_id: int, host: str = DEFAULT_HOST, concurrency: int | None = None
+) -> int:
     """
     Start translation
 
@@ -535,9 +539,10 @@ def _start_translation(api_key: str, project_id: int, host: str = DEFAULT_HOST, 
     payload = {"project_id": project_id, "identity": _get_identity()}
     if concurrency:
         payload["concurrency"] = concurrency
+
     response = post_data(
         url,
-        json_data=,
+        json_data=payload,
         headers=headers,
     )
     translation_id = response.json()["task_id"]
@@ -604,7 +609,9 @@ def _wait_for_translation_results(
 
                     print(f"\r✓ Translation completed with status: {status}")
                     if total_translations > 0:
-                        print(f"✓ Validated {validated_count} out of {total_translations} translations")
+                        print(
+                            f"✓ Validated {validated_count} out of {total_translations} translations"
+                        )
                     sys.stdout.flush()
                     return result
             except (requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
@@ -614,7 +621,10 @@ def _wait_for_translation_results(
                     sys.stdout.flush()
                     raise
                 # Continue polling after connection error
-                print(f"\r⚠ Connection error {connection_error_count}/{max_connection_errors}, retrying...", end='')
+                print(
+                    f"\r⚠ Connection error {connection_error_count}/{max_connection_errors}, retrying...",
+                    end='',
+                )
                 sys.stdout.flush()
 
             last_check_time = current_time
@@ -765,7 +775,11 @@ def _render_translated_model_as_html(
             problem = html.escape(failure_summary.get('problem', ''))
             error_message = html.escape(failure_summary.get('error_message', ''))
             solution = html.escape(failure_summary.get('solution', ''))
-            location = html.escape(failure_summary.get('location', '')) if failure_summary.get('location') else None
+            location = (
+                html.escape(failure_summary.get('location', ''))
+                if failure_summary.get('location')
+                else None
+            )
             reason = html.escape(failure_summary.get('reason', ''))
 
             failure_content = f"""
