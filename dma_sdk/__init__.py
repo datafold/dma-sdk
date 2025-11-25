@@ -162,7 +162,7 @@ def create_organization(org_token: str, host: str | None = None) -> Tuple[str, i
     return api_key, org_id
 
 
-def translate_queries(api_key: str, queries: List[str], host: str | None = None) -> Tuple[int, int]:
+def translate_queries(api_key: str, queries: List[str], host: str | None = None, concurrency: int | None = None) -> Tuple[int, int]:
     """
     Main entry point to translate a query end to end.
 
@@ -191,7 +191,7 @@ def translate_queries(api_key: str, queries: List[str], host: str | None = None)
     print(f"✓ Queries uploaded")
 
     # Start translating queries
-    translation_id = _start_translation(api_key, project_id, host)
+    translation_id = _start_translation(api_key, project_id, host, concurrency=concurrency)
     print(f"✓ Started translation with id {translation_id}")
 
     # Store for later retrieval
@@ -260,6 +260,7 @@ def translate_queries_and_render_results(
     org_token: str | None = None,
     include_identity: bool = True,
     host: str | None = None,
+    concurrency: int | None = None,
 ) -> None:
     """
     Translate SQL queries and render results.
@@ -323,7 +324,7 @@ def translate_queries_and_render_results(
     print(f"✓ Queries uploaded")
 
     # Start translating queries
-    translation_id = _start_translation(api_key, project_id, host)
+    translation_id = _start_translation(api_key, project_id, host, concurrency=concurrency)
     print(f"✓ Started translation with id {translation_id}")
 
     # Store for later retrieval
@@ -349,6 +350,7 @@ def translate_queries_and_get_results(
     org_token: str | None = None,
     include_identity: bool = True,
     host: str | None = None,
+    concurrency: int | None = None,
 ) -> dict:
     if org_token is None:
         org_token = DEFAULT_ORG_TOKEN
@@ -364,7 +366,7 @@ def translate_queries_and_get_results(
         raise ValueError(
             "API key is not set. Please call create_organization or set the API key manually."
         )
-    project_id, translation_id = translate_queries(api_key, queries, host)
+    project_id, translation_id = translate_queries(api_key, queries, host, concurrency=concurrency)
     translation_results = view_translation_results_as_dict(api_key, project_id, translation_id)
     return translation_results
 
@@ -513,7 +515,7 @@ def _upload_queries(
     return response.json()
 
 
-def _start_translation(api_key: str, project_id: int, host: str = DEFAULT_HOST) -> int:
+def _start_translation(api_key: str, project_id: int, host: str = DEFAULT_HOST, concurrency: int | None = None) -> int:
     """
     Start translation
 
@@ -530,9 +532,12 @@ def _start_translation(api_key: str, project_id: int, host: str = DEFAULT_HOST) 
     headers = prepare_headers(api_key)
     headers["Content-Type"] = "application/json"
 
+    payload = {"project_id": project_id, "identity": _get_identity()}
+    if concurrency:
+        payload["concurrency"] = concurrency
     response = post_data(
         url,
-        json_data={"project_id": project_id, "identity": _get_identity()},
+        json_data=,
         headers=headers,
     )
     translation_id = response.json()["task_id"]
