@@ -565,9 +565,10 @@ def _wait_for_translation_results(
     Returns:
         dict: Final translation result
     """
-    from IPython.display import clear_output
+    from IPython.display import clear_output, HTML, display
     import sys
     import requests
+    from urllib.parse import urlparse
 
     host = _get_host(host)
     url = prepare_api_url(
@@ -583,6 +584,10 @@ def _wait_for_translation_results(
     i = 0
     connection_error_count = 0
     max_connection_errors = 5
+    error_log = []  # Track all errors
+
+    # Create a display handle for updating warnings without clearing output
+    warnings_handle = None
 
     while True:
         current_time = time.time()
@@ -607,25 +612,69 @@ def _wait_for_translation_results(
                         if model.get("translation_status") == TranslationStatus.VALID_TRANSLATION
                     )
 
+                    # Clear the spinner line and print success
                     print(f"\r✓ Translation completed with status: {status}")
                     if total_translations > 0:
                         print(
                             f"✓ Validated {validated_count} out of {total_translations} translations"
                         )
                     sys.stdout.flush()
+
+                    # Add warnings to result for later display in HTML
+                    result['_polling_errors'] = error_log
                     return result
-            except (requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
+            except (
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.HTTPError,
+                requests.exceptions.RequestException,
+            ) as e:
                 connection_error_count += 1
+
+                # Format error message using actual error information
+                if isinstance(e, requests.exceptions.HTTPError) and hasattr(e, 'response'):
+                    error_code = e.response.status_code
+                    error_msg = str(e)
+                elif isinstance(e, requests.exceptions.ConnectionError):
+                    error_code = "ConnectionError"
+                    error_msg = str(e)
+                elif isinstance(e, requests.exceptions.Timeout):
+                    error_code = "Timeout"
+                    error_msg = str(e)
+                else:
+                    error_code = type(e).__name__
+                    error_msg = str(e)
+
+                error_log.append(f"{error_code}: {error_msg}")
+
+                # Display/update warnings section using display_id to avoid clearing output
+                error_items = '\n'.join([f'  {err}' for err in error_log])
+                warnings_html = f"""
+                <details>
+                    <summary style="cursor: pointer; color: #6c757d; font-size: 14px;">Warnings</summary>
+                    <div style="padding: 8px; color: #6c757d; font-family: monospace; font-size: 13px; white-space: pre-wrap;">{error_items}</div>
+                </details>
+                """
+
+                if warnings_handle is None:
+                    # First time - create the display with an ID
+                    warnings_handle = display(HTML(warnings_html), display_id=True)
+                else:
+                    # Update the existing display without clearing
+                    warnings_handle.update(HTML(warnings_html))
+
                 if connection_error_count >= max_connection_errors:
-                    print(f"\r✗ Failed to connect after {max_connection_errors} attempts")
+                    # Show errors section on failure - update the display to show error styling
+                    error_items = '\n'.join([f'  {err}' for err in error_log])
+                    errors_html = f"""
+                    <details>
+                        <summary style="cursor: pointer; color: #dc3545; font-size: 14px;">✗ Failed after {max_connection_errors} consecutive errors</summary>
+                        <div style="padding: 8px; color: #6c757d; font-family: monospace; font-size: 13px; white-space: pre-wrap;">{error_items}</div>
+                    </details>
+                    """
+                    warnings_handle.update(HTML(errors_html))
                     sys.stdout.flush()
                     raise
-                # Continue polling after connection error
-                print(
-                    f"\r⚠ Connection error {connection_error_count}/{max_connection_errors}, retrying...",
-                    end='',
-                )
-                sys.stdout.flush()
 
             last_check_time = current_time
 
@@ -651,6 +700,19 @@ def _translation_results_html(
         str: HTML string for display
     """
     html = []
+
+    # Add polling errors section if there were any
+    polling_errors = translation_results.get('_polling_errors', [])
+    if polling_errors:
+        error_items = '\n'.join([f'<div class="polling-error-item">{html.escape(err)}</div>' for err in polling_errors])
+        html.append(f"""
+        <details class="polling-warnings">
+            <summary class="polling-warnings-summary">Warnings</summary>
+            <div class="polling-warnings-content">
+                {error_items}
+            </div>
+        </details>
+        """)
 
     # Sort models by filename with natural sorting (query_1, query_2, ..., query_10, query_11)
     def natural_sort_key(model: Dict) -> tuple:
@@ -686,6 +748,37 @@ def _translation_results_html(
 
     style = """
     <style>
+        .polling-warnings {
+            margin: 15px 0;
+            font-family: sans-serif;
+        }
+        .polling-warnings-summary {
+            cursor: pointer;
+            padding: 8px 12px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            color: #6c757d;
+            font-size: 14px;
+            user-select: none;
+            outline: none;
+        }
+        .polling-warnings-summary:hover {
+            background-color: #e9ecef;
+        }
+        .polling-warnings-content {
+            padding: 12px;
+            margin-top: 5px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+        .polling-error-item {
+            color: #6c757d;
+            font-size: 13px;
+            padding: 4px 0;
+            font-family: monospace;
+        }
         .collapsible {
             background-color: #f1f1f1;
             color: #333;
@@ -802,13 +895,15 @@ def _render_translated_model_as_html(
                 </div>
             """
         else:
-            failure_content = f'<div class="warning-message">The translation for "{html.escape(asset_name)}" could not be completed. Status: {html.escape(status)}</div>'
+            failure_content = f'<div class="warning-message">The translation could not be completed. Status: {html.escape(status)}</div>'
 
         warning_html = f"""
-        <div class="warning-box">
-            <div class="warning-title">⚠ Translation Failed</div>
-            {failure_content}
-        </div>
+        <details class="warning-details">
+            <summary class="warning-summary">Warnings</summary>
+            <div class="warning-content">
+                {failure_content}
+            </div>
+        </details>
         """
 
     # Build diff HTML if we have translation results
@@ -865,34 +960,46 @@ def _render_translated_model_as_html(
 
     return f"""
     <style>
-        .warning-box {{
-            background-color: #fff3cd;
-            border: 1px solid #ffc107;
-            border-left: 4px solid #ff9800;
-            padding: 20px;
+        .warning-details {{
             margin: 10px 0;
             font-family: sans-serif;
         }}
-        .warning-title {{
-            color: #856404;
-            font-weight: bold;
-            font-size: 16px;
-            margin-bottom: 15px;
+        .warning-summary {{
+            cursor: pointer;
+            padding: 8px 12px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            color: #6c757d;
+            font-size: 14px;
+            user-select: none;
+            outline: none;
+        }}
+        .warning-summary:hover {{
+            background-color: #e9ecef;
+        }}
+        .warning-content {{
+            padding: 15px;
+            margin-top: 5px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
         }}
         .warning-message {{
-            color: #856404;
+            color: #495057;
+            font-size: 14px;
         }}
         .failure-section {{
             margin: 12px 0;
         }}
         .failure-label {{
-            color: #856404;
+            color: #495057;
             font-weight: bold;
             font-size: 13px;
             margin-bottom: 4px;
         }}
         .failure-text {{
-            color: #856404;
+            color: #6c757d;
             font-size: 13px;
             line-height: 1.5;
             white-space: pre-wrap;
