@@ -211,6 +211,7 @@ def view_translation_results_as_html(
     host: str | None = None,
     source_type: str = "snowflake",
     target_type: str = "databricks",
+    max_errors: int = 5,
 ) -> str:
     """
     View translation results
@@ -228,13 +229,13 @@ def view_translation_results_as_html(
     host = _get_host(host)
 
     translation_results = _wait_for_translation_results(
-        api_key, project_id, translation_id, 5, host
+        api_key, project_id, translation_id, 5, max_errors=max_errors, host=host
     )
     return _translation_results_html(translation_results, source_type, target_type)
 
 
 def view_translation_results_as_dict(
-    api_key: str, project_id: int, translation_id: int, host: str | None = None
+    api_key: str, project_id: int, translation_id: int, max_errors: int = 5, host: str | None = None
 ) -> dict:
     """
     View translation results
@@ -244,13 +245,14 @@ def view_translation_results_as_dict(
         api_key: Authentication token
         project_id: Project ID to translate
         translation_id: Translation ID used to translate
+        max_errors: Maximum number of consecutive errors before giving up (default: 5)
     Returns:
         str: html string to be displayed in Jupyter Notebook
     """
     host = _get_host(host)
 
     translation_results = _wait_for_translation_results(
-        api_key, project_id, translation_id, 5, host
+        api_key, project_id, translation_id, 5, max_errors=max_errors, host=host
     )
     return translation_results
 
@@ -259,6 +261,7 @@ def translate_queries_and_render_results(
     queries: List[str],
     source_type: str = 'snowflake',
     target_type: str = 'databricks',
+    max_errors: int = 5,
     org_token: str | None = None,
     include_identity: bool = True,
     host: str | None = None,
@@ -273,6 +276,7 @@ def translate_queries_and_render_results(
                      If None, uses first non-target data source
         target_type: Target database type (e.g., 'bigquery', 'databricks').
                      If None, uses 'databricks' for backward compatibility
+        max_errors: Maximum number of consecutive errors before giving up (default: 5)
         org_token: Organization token for authentication (defaults to DEFAULT_ORG_TOKEN)
         include_identity: Whether to collect and send identity info (default: True)
         host: Host URL for Datafold instance (defaults to DEFAULT_HOST)
@@ -338,7 +342,7 @@ def translate_queries_and_render_results(
 
     # Wait for and display results
     translation_results = _wait_for_translation_results(
-        api_key, project_id, translation_id, 5, host
+        api_key, project_id, translation_id, 5, max_errors=max_errors, host=host
     )
     html = _translation_results_html(translation_results, source_type, target_type)
 
@@ -352,6 +356,7 @@ def translate_queries_and_get_results(
     org_token: str | None = None,
     include_identity: bool = True,
     host: str | None = None,
+    max_errors: int = 5,
     concurrency: int | None = None,
 ) -> dict:
     if org_token is None:
@@ -369,7 +374,9 @@ def translate_queries_and_get_results(
             "API key is not set. Please call create_organization or set the API key manually."
         )
     project_id, translation_id = translate_queries(api_key, queries, host, concurrency=concurrency)
-    translation_results = view_translation_results_as_dict(api_key, project_id, translation_id)
+    translation_results = view_translation_results_as_dict(
+        api_key, project_id, translation_id, max_errors=max_errors
+    )
     return translation_results
 
 
@@ -550,7 +557,12 @@ def _start_translation(
 
 
 def _wait_for_translation_results(
-    api_key: str, project_id: int, translation_id: int, poll_interval: int, host: str = DEFAULT_HOST
+    api_key: str,
+    project_id: int,
+    translation_id: int,
+    poll_interval: int,
+    max_errors: int = 5,
+    host: str = DEFAULT_HOST,
 ) -> Dict:
     """
     Poll for translation completion
@@ -583,7 +595,6 @@ def _wait_for_translation_results(
     last_check_time = 0
     i = 0
     connection_error_count = 0
-    max_connection_errors = 5
     error_log = []  # Track all errors
 
     # Create a display handle for updating warnings without clearing output
@@ -663,7 +674,7 @@ def _wait_for_translation_results(
                     # Update the existing display without clearing
                     warnings_handle.update(HTML(warnings_html))
 
-                if connection_error_count >= max_connection_errors:
+                if connection_error_count >= max_errors:
                     # Show errors section on failure - update the display to show error styling
                     error_items = '\n'.join([f'  {err}' for err in error_log])
                     errors_html = f"""
@@ -704,15 +715,19 @@ def _translation_results_html(
     # Add polling errors section if there were any
     polling_errors = translation_results.get('_polling_errors', [])
     if polling_errors:
-        error_items = '\n'.join([f'<div class="polling-error-item">{html.escape(err)}</div>' for err in polling_errors])
-        html.append(f"""
+        error_items = '\n'.join(
+            [f'<div class="polling-error-item">{html.escape(err)}</div>' for err in polling_errors]
+        )
+        html.append(
+            f"""
         <details class="polling-warnings">
             <summary class="polling-warnings-summary">Warnings</summary>
             <div class="polling-warnings-content">
                 {error_items}
             </div>
         </details>
-        """)
+        """
+        )
 
     # Sort models by filename with natural sorting (query_1, query_2, ..., query_10, query_11)
     def natural_sort_key(model: Dict) -> tuple:
