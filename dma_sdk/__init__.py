@@ -390,7 +390,12 @@ def translate_queries_and_get_results(
             "API key is not set. Please call create_organization or set the API key manually."
         )
     project_id, translation_id = translate_queries(
-        api_key, queries, host, source_type, target_type, concurrency=concurrency
+        api_key=api_key,
+        queries=queries,
+        source_type=source_type,
+        target_type=target_type,
+        host=host,
+        concurrency=concurrency,
     )
     translation_results = view_translation_results_as_dict(
         api_key, project_id, translation_id, max_errors=max_errors
