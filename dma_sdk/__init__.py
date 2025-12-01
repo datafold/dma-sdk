@@ -163,7 +163,12 @@ def create_organization(org_token: str, host: str | None = None) -> Tuple[str, i
 
 
 def translate_queries(
-    api_key: str, queries: List[str], host: str | None = None, concurrency: int | None = None
+    api_key: str,
+    queries: List[str],
+    source_type: str,
+    target_type: str,
+    host: str | None = None,
+    concurrency: int | None = None,
 ) -> Tuple[int, int]:
     """
     Main entry point to translate a query end to end.
@@ -180,10 +185,19 @@ def translate_queries(
 
     # Create DMA project
     data_sources = _get_data_sources(api_key, host)
-    source_data_source_id = [d for d in data_sources if d['type'] != "databricks"][0]['id']
-    target_data_source_id = [d for d in data_sources if d['type'] == "databricks"][0]['id']
+    source_ds = next((d for d in data_sources if d['type'] == source_type), None)
+    if source_ds is None:
+        raise ValueError(
+            f"No {source_type} data source found. Please configure a {source_type} data source."
+        )
+
+    target_ds = next((d for d in data_sources if d['type'] == target_type), None)
+    if target_ds is None:
+        raise ValueError(
+            f"No {target_type} data source found. Please configure a {target_type} data source."
+        )
     project = _create_dma_project(
-        api_key, source_data_source_id, target_data_source_id, 'Databricks Notebook Project', host
+        api_key, source_ds['id'], target_ds['id'], 'Databricks Notebook Project', host
     )
     project_id = project['id']
     print(f"✓ Project created with id {project_id}")
@@ -353,6 +367,8 @@ def translate_queries_and_render_results(
 
 def translate_queries_and_get_results(
     queries: List[str],
+    source_type: str = 'snowflake',
+    target_type: str = 'databricks',
     org_token: str | None = None,
     include_identity: bool = True,
     host: str | None = None,
@@ -373,7 +389,9 @@ def translate_queries_and_get_results(
         raise ValueError(
             "API key is not set. Please call create_organization or set the API key manually."
         )
-    project_id, translation_id = translate_queries(api_key, queries, host, concurrency=concurrency)
+    project_id, translation_id = translate_queries(
+        api_key, queries, host, source_type, target_type, concurrency=concurrency
+    )
     translation_results = view_translation_results_as_dict(
         api_key, project_id, translation_id, max_errors=max_errors
     )
